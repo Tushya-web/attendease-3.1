@@ -97,3 +97,8 @@ dist/
 # ===============================
 # */migrations/
 # !*/migrations/__init__.py
+
+# DeepFace model weights
+media/deepface_models/
+*.h5
+*.pkl
