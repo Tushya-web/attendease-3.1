@@ -1,0 +1,368 @@
+{% extends "admin/base.html" %}
+{% load custom_filters %}
+
+{% block extrajs %}
+<!-- ✅ Lucide Icons CDN -->
+<script src="https://unpkg.com/lucide@latest"></script>
+{% endblock %}
+
+{% block content %}
+<div class="upload-page">
+  <div class="upload-container">
+    <!-- Upload Card -->
+    <div class="upload-card">
+      <div class="header-icon">
+        <i data-lucide="upload-cloud"></i>
+      </div>
+      <h2 class="page-title">Upload Master Data</h2>
+      <p class="subtitle">
+        Upload your <strong>CSV file</strong> containing  
+        <code>username</code>, <code>enrollment_no</code>, <code>email</code>, <code>user_type</code>, and <code>face_path</code>.  
+        The system will automatically sync and approve users.
+      </p>
+
+      <!-- Upload Form -->
+      <form method="POST" enctype="multipart/form-data" class="upload-form" id="uploadForm">
+        {% csrf_token %}
+        <div class="file-drop" id="drop-zone">
+          <input type="file" id="file-upload" name="file" accept=".csv" required hidden>
+          <label for="file-upload" id="upload-label">
+            <i data-lucide="file-up"></i>
+            <p>Drag & drop your CSV file here or <span>click to browse</span></p>
+          </label>
+        </div>
+
+        <!-- Progress Bar -->
+        <div id="progress-bar-container">
+          <div id="progress-bar"></div>
+        </div>
+
+        <button type="submit" class="btn-upload">
+          <i data-lucide="arrow-up-circle"></i> Upload File
+        </button>
+      </form>
+    </div>
+
+    <!-- Recent Uploads -->
+    <div class="uploads-section">
+      <div class="header-icon small">
+        <i data-lucide="clock"></i>
+      </div>
+      <h3>Recent Uploads</h3>
+      {% if uploads %}
+      <div class="table-container">
+        <table class="modern-table">
+          <thead>
+            <tr>
+              <th><i data-lucide="file-text"></i> File Name</th>
+              <th><i data-lucide="user"></i> Uploaded By</th>
+              <th><i data-lucide="calendar"></i> Uploaded On</th>
+              <th><i data-lucide="rows"></i> Rows</th>
+              <th><i data-lucide="plus"></i> Created</th>
+              <th><i data-lucide="edit"></i> Updated</th>
+              <th><i data-lucide="settings"></i> Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for u in uploads %}
+            <tr>
+              <td>{{ u.file.name|basename }}</td>
+              <td>{{ u.uploaded_by }}</td>
+              <td>{{ u.uploaded_at|date:"Y-m-d H:i" }}</td>
+              <td>{{ u.total_rows }}</td>
+              <td>{{ u.created_rows }}</td>
+              <td>{{ u.updated_rows }}</td>
+              <td>
+                <a href="{{ u.file.url }}" target="_blank" class="link-view">View</a>
+                <span class="divider">|</span>
+                <a href="?reupload={{ u.id }}" class="link-edit">Reupload</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <i data-lucide="database"></i>
+        <p>No uploads yet. Start by uploading your first master file 👇</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Toast Notification -->
+<div id="toast" class="toast">File uploaded successfully ✅</div>
+
+<style>
+/* ===== Page Container (FULL CENTER) ===== */
+.upload-page {
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at top left, #f5f3ff, #ede9fe, #f8f6ff);
+  font-family: 'Inter', sans-serif;
+  padding: 30px;
+}
+
+/* ===== Centered Content Wrapper ===== */
+.upload-container {
+  max-width: 950px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 30px;
+}
+
+/* ===== Upload Card ===== */
+.upload-card {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(123, 44, 191, 0.2);
+  padding: 40px;
+  text-align: center;
+  transition: 0.3s ease;
+}
+.upload-card:hover {
+  box-shadow: 0 12px 40px rgba(123, 44, 191, 0.25);
+}
+
+/* ===== Header Icon ===== */
+.header-icon {
+  width: 70px;
+  height: 70px;
+  background: linear-gradient(120deg, #7b2cbf, #9333ea);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: white;
+  margin: 0 auto 15px;
+}
+.header-icon.small {
+  width: 50px;
+  height: 50px;
+  margin-bottom: 12px;
+}
+
+/* ===== Titles ===== */
+.page-title {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #6f2dbd;
+  margin-bottom: 10px;
+}
+.subtitle {
+  color: #5b21b6;
+  font-size: 0.95rem;
+  margin-bottom: 25px;
+}
+
+/* ===== File Drop Zone ===== */
+.file-drop {
+  border: 2px dashed #7b2cbf;
+  border-radius: 12px;
+  padding: 45px 20px;
+  background: #faf5ff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+.file-drop:hover {
+  background: #f3e8ff;
+}
+.file-drop p {
+  margin-top: 10px;
+  color: #6d28d9;
+  font-weight: 500;
+}
+.file-drop span {
+  color: #9333ea;
+  font-weight: 600;
+}
+
+/* ===== Progress Bar ===== */
+#progress-bar-container {
+  width: 100%;
+  height: 8px;
+  background: #ede9fe;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: 20px;
+  display: none;
+}
+#progress-bar {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #7b2cbf, #9333ea);
+  transition: width 0.3s ease-in-out;
+}
+
+/* ===== Upload Button ===== */
+.btn-upload {
+  margin-top: 25px;
+  background: linear-gradient(90deg, #7b2cbf, #9333ea);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+.btn-upload:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(123,44,191,0.3);
+}
+
+/* ===== Recent Uploads ===== */
+.uploads-section {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 20px;
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.08);
+  padding: 30px;
+  text-align: center;
+}
+.uploads-section h3 {
+  color: #5a189a;
+  font-size: 1.4rem;
+  margin-bottom: 20px;
+}
+.table-container {
+  overflow-x: auto;
+}
+.modern-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.modern-table th {
+  background: #9333ea;
+  color: white;
+  padding: 12px;
+}
+.modern-table td {
+  padding: 10px;
+  border-bottom: 1px solid #eee;
+}
+.modern-table tr:hover {
+  background: #faf5ff;
+}
+
+/* ===== Empty State ===== */
+.empty-state {
+  text-align: center;
+  color: #7b2cbf;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.empty-state i {
+  width: 45px;
+  height: 45px;
+  margin-bottom: 10px;
+}
+
+/* ===== Toast ===== */
+.toast {
+  visibility: hidden;
+  min-width: 250px;
+  background: linear-gradient(90deg, #7b2cbf, #9333ea);
+  color: #fff;
+  text-align: center;
+  border-radius: 8px;
+  padding: 12px;
+  position: fixed;
+  z-index: 9999;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.4s ease, bottom 0.4s ease;
+}
+.toast.show {
+  visibility: visible;
+  opacity: 1;
+  bottom: 50px;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 768px) {
+  .upload-container { gap: 25px; }
+  .upload-card, .uploads-section { padding: 25px; }
+  .page-title { font-size: 1.5rem; }
+  .modern-table th, .modern-table td { font-size: 0.8rem; padding: 8px; }
+}
+</style>
+
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>
+  // Wait until Lucide JS loads fully
+  document.addEventListener("DOMContentLoaded", () => {
+    lucide.createIcons(); // re-render icons dynamically
+  });
+
+  // Your existing code here ↓
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-upload");
+  const uploadLabel = document.getElementById("upload-label");
+  const progressContainer = document.getElementById("progress-bar-container");
+  const progressBar = document.getElementById("progress-bar");
+  const toast = document.getElementById("toast");
+  const uploadForm = document.getElementById("uploadForm");
+
+  // Drag & Drop
+  dropZone.addEventListener("click", () => fileInput.click());
+  dropZone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropZone.style.background = "#ede9fe";
+  });
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.style.background = "#faf5ff";
+  });
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    fileInput.files = e.dataTransfer.files;
+    uploadLabel.innerHTML = `<p><strong>${fileInput.files[0].name}</strong> ready to upload ✅</p>`;
+    dropZone.style.background = "#f3e8ff";
+    lucide.createIcons(); // Refresh icons if DOM updated
+  });
+
+  // Progress + Toast
+  uploadForm.addEventListener("submit", e => {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    progressContainer.style.display = "block";
+    let width = 0;
+    const interval = setInterval(() => {
+      width += 10;
+      progressBar.style.width = width + "%";
+      if (width >= 100) {
+        clearInterval(interval);
+        showToast("✅ File uploaded successfully!");
+        progressBar.style.width = "100%";
+      }
+    }, 150);
+  });
+
+  function showToast(message) {
+    toast.textContent = message;
+    toast.classList.add("show");
+    setTimeout(() => toast.classList.remove("show"), 3500);
+  }
+</script>
+{% endblock %}
+

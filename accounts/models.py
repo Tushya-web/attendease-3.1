@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings  
+from django.contrib.auth import get_user_model
+
 
 # Create your models here.
 
@@ -97,3 +99,15 @@ class UserFace(models.Model):
 
     def __str__(self):
         return f"{self.user.username} Face"
+    
+class MasterUserRecord(models.Model):
+    username = models.CharField(max_length=150)
+    enrollment_no = models.CharField(max_length=50, unique=True)
+    email = models.EmailField(unique=True)
+    user_type = models.CharField(max_length=20, choices=[("student", "Student"), ("faculty", "Faculty")])
+    face_image = models.ImageField(upload_to="faces/master_faces/", blank=True, null=True)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.username} ({self.enrollment_no})"

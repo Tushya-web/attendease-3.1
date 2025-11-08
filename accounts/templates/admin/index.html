@@ -1,11 +1,16 @@
-{% extends "admin/base_site.html" %}
-{% load static %}
+{% extends "admin/base.html" %}
+{% load i18n static admin_urls admin_list %}
 
-{% block title %}AttendEase Admin{% endblock %}
-
-{% block branding %}
-<h1 id="site-name"><a href="{% url 'admin:index' %}">AttendEase Admin</a></h1>
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+  <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+  &rsaquo; Dashboard
+</div>
+<a href="{% url 'admin:upload_master_data' %}" class="btn" style="float:right;margin-bottom:20px;">
+  📂 Upload Master Data
+</a>
 {% endblock %}
+
 
 {% block content %}
 <div id="dashboard-container" class="dashboard-container">

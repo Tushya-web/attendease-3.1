@@ -5,7 +5,7 @@ from django.http import HttpResponse
 from django.contrib.auth.views import LoginView
 from django.template import loader
 
-from .models import Attendance, FaceChangeRequest, LeaveRequest, PendingFaceUpdate , UserFace
+from .models import Attendance, CustomUser, FaceChangeRequest, LeaveRequest, MasterUserRecord , UserFace
 from .forms import RegistrationForm
 
 from django.contrib.auth import authenticate, login
@@ -27,6 +27,15 @@ import csv
 
 import calendar
 from datetime import datetime, timedelta, date
+from django.conf import settings
+from django.contrib import messages
+from django.core.files.storage import FileSystemStorage
+from django.http import JsonResponse
+from django.shortcuts import render, redirect
+import csv, io, json, os
+from datetime import datetime
+from .models import CustomUser, UserFace
+
 
 import base64, os, cv2, numpy as np
 from django.conf import settings
@@ -39,6 +48,7 @@ from .utils import mark_user_attendance
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from .face_system import add_face_image, decode_base64_image, recognize_logged_in_user
+from deepface import DeepFace
 
 @login_required
 @csrf_exempt
@@ -270,58 +280,150 @@ def help_support(request):
 @csrf_exempt
 def face_add(request):
     user = request.user
-
-    # Check if user already has a face
     user_face = UserFace.objects.filter(user=user).first()
-    has_face = True if user_face and user_face.face_image else False
+    has_face = bool(user_face and user_face.face_image)
 
     if request.method == "POST":
         import json
         data = json.loads(request.body)
         img_data = data.get("image_data")
+
         if img_data:
-            # Prepare image path
+            # Save new image
             faces_dir = os.path.join(settings.MEDIA_ROOT, "faces", user.username)
             os.makedirs(faces_dir, exist_ok=True)
-            img_path = os.path.join(faces_dir, f"{user.username}_1.jpg")
+            new_face_path = os.path.join(faces_dir, f"{user.username}_new.jpg")
 
-            # Decode base64 image
             header, encoded = img_data.split(",", 1)
             img_bytes = base64.b64decode(encoded)
             nparr = np.frombuffer(img_bytes, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            cv2.imwrite(img_path, img)
+            cv2.imwrite(new_face_path, img)
 
+            # ✅ If no existing face (first time)
             if not has_face:
-                # First-time face → save directly to UserFace
                 UserFace.objects.update_or_create(
                     user=user,
-                    defaults={"face_image": f"faces/{user.username}/{user.username}_1.jpg"}
+                    defaults={"face_image": f"faces/{user.username}/{user.username}_new.jpg"}
                 )
-                return JsonResponse({"status": "success", "message": "Face captured successfully!"})
-            else:
-                # Existing user → create/update pending FaceChangeRequest
-                FaceChangeRequest.objects.update_or_create(
-                    user=user,
-                    defaults={"status": "Pending", "new_face_path": img_path}
-                )
-                return JsonResponse({"status": "success", "message": "Face submitted for admin approval."})
+                user.has_face_data = True
+                user.save()
+                return JsonResponse({"status": "success", "message": "✅ Face registered successfully!"})
+
+            # ✅ Compare with default master face using DeepFace
+            try:
+                master_face_path = os.path.join(settings.MEDIA_ROOT, user_face.face_image.name)
+                result = DeepFace.verify(img1_path=master_face_path, img2_path=new_face_path, model_name="Facenet")
+
+                if result["verified"]:
+                    # Match confirmed → auto-approve
+                    FaceChangeRequest.objects.create(
+                        user=user,
+                        new_face_path=new_face_path,
+                        status="Approved"
+                    )
+
+                    # Replace old face with new one
+                    UserFace.objects.update_or_create(
+                        user=user,
+                        defaults={"face_image": f"faces/{user.username}/{user.username}_new.jpg"}
+                    )
+
+                    return JsonResponse({
+                        "status": "success",
+                        "message": "✅ Face verified and updated successfully!"
+                    })
+                else:
+                    # Mismatch → auto-reject
+                    FaceChangeRequest.objects.create(
+                        user=user,
+                        new_face_path=new_face_path,
+                        status="Rejected"
+                    )
+
+                    # ✅ Auto-delete the unmatched image
+                    if os.path.exists(new_face_path):
+                        os.remove(new_face_path)
+
+                    return JsonResponse({
+                        "status": "error",
+                        "message": "❌ Face did not match. Please try again."
+                })
+
+            except Exception as e:
+                traceback.print_exc()
+                return JsonResponse({
+                    "status": "error",
+                    "message": f"Face verification failed: {str(e)}"
+                })
 
         return JsonResponse({"status": "error", "message": "No image data received."})
 
-    # GET request → render template
+    # GET request — display current faces
     old_face_url = user_face.face_image.url if has_face else None
-
-    # Check if there’s a pending change request
-    pending_obj = FaceChangeRequest.objects.filter(user=user, status="Pending").first()
-    pending_face_url = pending_obj.new_face_path.replace(settings.MEDIA_ROOT, settings.MEDIA_URL) if pending_obj else None
+    approved_request = FaceChangeRequest.objects.filter(user=user, status="Approved").last()
 
     return render(request, "face_add.html", {
         "user": user,
         "old_face": old_face_url,
-        "pending_face": pending_face_url,
+        "approved_request": approved_request,
         "has_face": has_face,
     })
+    
+# def face_add(request):
+#     user = request.user
+
+#     # Check if user already has a face
+#     user_face = UserFace.objects.filter(user=user).first()
+#     has_face = True if user_face and user_face.face_image else False
+
+#     if request.method == "POST":
+#         import json
+#         data = json.loads(request.body)
+#         img_data = data.get("image_data")
+#         if img_data:
+#             # Prepare image path
+#             faces_dir = os.path.join(settings.MEDIA_ROOT, "faces", user.username)
+#             os.makedirs(faces_dir, exist_ok=True)
+#             img_path = os.path.join(faces_dir, f"{user.username}_1.jpg")
+
+#             # Decode base64 image
+#             header, encoded = img_data.split(",", 1)
+#             img_bytes = base64.b64decode(encoded)
+#             nparr = np.frombuffer(img_bytes, np.uint8)
+#             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+#             cv2.imwrite(img_path, img)
+
+#             if not has_face:
+#                 # First-time face → save directly to UserFace
+#                 UserFace.objects.update_or_create(
+#                     user=user,
+#                     defaults={"face_image": f"faces/{user.username}/{user.username}_1.jpg"}
+#                 )
+#                 return JsonResponse({"status": "success", "message": "Face captured successfully!"})
+#             else:
+#                 # Existing user → create/update pending FaceChangeRequest
+#                 FaceChangeRequest.objects.update_or_create(
+#                     user=user,
+#                     defaults={"status": "Pending", "new_face_path": img_path}
+#                 )
+#                 return JsonResponse({"status": "success", "message": "Face submitted for admin approval."})
+
+#         return JsonResponse({"status": "error", "message": "No image data received."})
+
+#     # GET request → render template
+#     old_face_url = user_face.face_image.url if has_face else None
+
+#     # Check if there’s a pending change request
+#     pending_obj = FaceChangeRequest.objects.filter(user=user, status="Pending").first()
+#     pending_face_url = pending_obj.new_face_path.replace(settings.MEDIA_ROOT, settings.MEDIA_URL) if pending_obj else None
+
+#     return render(request, "face_add.html", {
+#         "user": user,
+#         "old_face": old_face_url,
+#         "pending_face": pending_face_url,
+#         "has_face": has_face,
+#     })
 
 OPENROUTER_API_KEY = "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"  # Store in settings.py for safety
 
@@ -331,6 +433,112 @@ OPENROUTER_API_KEY = "sk-or-v1-057072205470ab2723f8b63d3dc8eb5acb26db34730899715
 def chatbot_view(request):
     return render(request, "chatbot.html")
 
+def upload_master_data_view(self, request):
+    """
+    Handles upload, display, edit, delete, and update of master data CSV files.
+    """
+    # =============================
+    # 1️⃣ Handle New File Upload
+    # =============================
+    if request.method == "POST" and request.FILES.get("file"):
+        file = request.FILES["file"]
+
+        fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, "master_uploads"))
+        filename = fs.save(file.name, file)
+        file_path = fs.path(filename)
+
+        # Decode safely (UTF-8 or fallback)
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        try:
+            decoded_file = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded_file = file_bytes.decode("latin-1")
+
+        reader = csv.DictReader(io.StringIO(decoded_file, newline=''))
+        rows = list(reader)
+
+        # Save record of upload
+        MasterUserRecord.objects.create(
+            uploaded_by=request.user,
+            file=f"master_uploads/{filename}",
+            total_rows=len(rows),
+        )
+
+        # Render preview
+        context = {
+            **self.each_context(request),
+            "rows": rows,
+            "filename": filename,
+            "columns": reader.fieldnames,
+        }
+        return render(request, "admin/master_data_preview.html", context)
+
+    # =============================
+    # 2️⃣ Handle AJAX Save (Edit/Add/Delete)
+    # =============================
+    if request.method == "POST" and request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        data = json.loads(request.body)
+        filename = data.get("filename")
+        rows = data.get("rows", [])
+        file_path = os.path.join(settings.MEDIA_ROOT, "master_uploads", filename)
+
+        # Rewrite CSV
+        with open(file_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["username", "enrollment_no", "email", "user_type", "face_path"])
+            writer.writeheader()
+            for r in rows:
+                writer.writerow(r)
+
+        # Sync changes to DB
+        created_count, updated_count = 0, 0
+        for r in rows:
+            username = (r.get("username") or "").strip()
+            enrollment = (r.get("enrollment_no") or "").strip()
+            email = (r.get("email") or "").strip()
+            user_type = (r.get("user_type") or "student").strip()
+            face_path = (r.get("face_path") or "").strip()
+
+            if not enrollment or not email:
+                continue
+
+            user, created = CustomUser.objects.update_or_create(
+                enrollment_no=enrollment,
+                defaults={
+                    "username": username,
+                    "email": email,
+                    "user_type": user_type,
+                    "is_approved": True,
+                    "has_face_data": bool(face_path),
+                },
+            )
+
+            if face_path:
+                UserFace.objects.update_or_create(
+                    user=user,
+                    defaults={"face_image": face_path}
+                )
+
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
+
+        return JsonResponse({
+            "status": "success",
+            "created": created_count,
+            "updated": updated_count
+        })
+
+    # =============================
+    # 3️⃣ Render Recent Uploads List
+    # =============================
+    uploads = MasterUserRecord.objects.all().order_by("-created_at")[:10]
+    context = {
+        **self.each_context(request),
+        "uploads": uploads,
+    }
+    return render(request, "admin/upload_master_data.html", context)
 
 @csrf_exempt
 def chatbot_api(request):
@@ -436,39 +644,118 @@ def register(request):
     if request.method == "POST":
         form = RegistrationForm(request.POST)
         if form.is_valid():
-            user = form.save(commit=False)
-            user.set_password(form.cleaned_data["password"])
-            user.is_active = True
-            user.is_approved = False
-            user.save()
-            messages.success(request, "Registration request sent. Wait for admin approval.")
-            return redirect('userlogin')
+            enrollment_no = form.cleaned_data.get("enrollment_no")
+            username = form.cleaned_data.get("username")
+            password = form.cleaned_data.get("password")
+            user_type = form.cleaned_data.get("user_type")
+
+            # ✅ Check if this user exists in the MasterUserRecord (ignore email)
+            try:
+                master_user = MasterUserRecord.objects.get(
+                    enrollment_no=enrollment_no,
+                    user_type=user_type
+                )
+
+                # ✅ Create a CustomUser if not exists
+                user, created = CustomUser.objects.get_or_create(
+                    enrollment_no=enrollment_no,
+                    defaults={
+                        "username": username,
+                        "email": master_user.email,  # use master email
+                        "user_type": user_type,
+                        "is_active": True,
+                        "is_approved": True,
+                    }
+                )
+
+                # ✅ Set password and save
+                user.set_password(password)
+                user.save()
+
+                # ✅ Sync default face image from master
+                if master_user.face_image:
+                    UserFace.objects.update_or_create(
+                        user=user,
+                        defaults={"face_image": master_user.face_image}
+                    )
+                    user.has_face_data = True
+                    user.save()
+
+                messages.success(request, "✅ Verified from master list! Your account is now active.")
+                return redirect("userlogin")
+
+            except MasterUserRecord.DoesNotExist:
+                messages.error(request, "❌ Not found in authorized list. Contact admin.")
+                return redirect("register")
+
     else:
         form = RegistrationForm()
 
-    return render(request, "register.html", {"form": form}) 
+    return render(request, "register.html", {"form": form})
+
+
+# def register(request):
+#     if request.method == "POST":
+#         form = RegistrationForm(request.POST)
+#         if form.is_valid():
+#             user = form.save(commit=False)
+#             user.set_password(form.cleaned_data["password"])
+#             user.is_active = True
+#             user.is_approved = False
+#             user.save()
+#             messages.success(request, "Registration request sent. Wait for admin approval.")
+#             return redirect('userlogin')
+#     else:
+#         form = RegistrationForm()
+
+#     return render(request, "register.html", {"form": form}) 
 
 def login_view(request):
     if request.method == "POST":
         form = CustomLoginForm(request, data=request.POST)
         if form.is_valid():
-            username = form.cleaned_data.get('username')
-            password = form.cleaned_data.get('password')
+            username = form.cleaned_data.get("username")
+            password = form.cleaned_data.get("password")
             user = authenticate(request, username=username, password=password)
 
             if user is not None:
-                if user.is_approved: 
-                    login(request, user)
-                    messages.success(request, f"Welcome, {user.username}!")
-                    return redirect('userdash')
-                else:
-                    messages.error(request, "Your account is pending admin approval.")
+                # Auto-block any unauthorized or unapproved user
+                if not user.is_approved:
+                    messages.error(request, "⚠ Your account isn't verified in master list.")
+                    return redirect("userlogin")
+
+                login(request, user)
+                messages.success(request, f"Welcome, {user.username} 👋")
+                return redirect("userdash")
             else:
                 messages.error(request, "Invalid username or password.")
     else:
         form = CustomLoginForm()
 
     return render(request, "userlogin.html", {"form": form})
+
+
+# def login_view(request):
+#     if request.method == "POST":
+#         form = CustomLoginForm(request, data=request.POST)
+#         if form.is_valid():
+#             username = form.cleaned_data.get('username')
+#             password = form.cleaned_data.get('password')
+#             user = authenticate(request, username=username, password=password)
+
+#             if user is not None:
+#                 if user.is_approved: 
+#                     login(request, user)
+#                     messages.success(request, f"Welcome, {user.username}!")
+#                     return redirect('userdash')
+#                 else:
+#                     messages.error(request, "Your account is pending admin approval.")
+#             else:
+#                 messages.error(request, "Invalid username or password.")
+#     else:
+#         form = CustomLoginForm()
+
+#     return render(request, "userlogin.html", {"form": form})
 
 @login_required
 def userdash_view(request):

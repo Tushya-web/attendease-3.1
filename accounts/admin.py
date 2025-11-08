@@ -1,5 +1,6 @@
 import csv
 import os
+from pyexpat.errors import messages
 import shutil
 import cv2
 from datetime import timedelta, date 
@@ -14,8 +15,11 @@ from django.db.models import Count, Q, F
 from django.db.models.functions import TruncMonth
 from django.urls import path, reverse
 
-from django.contrib import messages as dj_messages
-from .models import CustomUser, Attendance, LeaveRequest, FaceChangeRequest, UserFace
+from django.contrib import messages
+import csv, io
+
+from .models import CustomUser, Attendance, LeaveRequest, FaceChangeRequest, UserFace, MasterUserRecord
+
 
 
 # ---------------------------
@@ -25,23 +29,96 @@ class CustomAdminSite(admin.AdminSite):
     site_header = "AttendEase Administration"
     site_title = "AttendEase Admin"
     index_title = "Dashboard"
+    
 
     # Custom URLs
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
             path('ajax/dashboard/', self.admin_view(self.ajax_dashboard_data), name='ajax_dashboard_data'),
+            path('upload-master-data/', self.admin_view(self.upload_master_data_view), name='upload_master_data'),
         ]
         return custom_urls + urls
 
-    # Dashboard index
+
+
+
+    def upload_master_data_view(self, request):
+        if request.method == "POST":
+            uploaded_file = request.FILES.get("file")
+            if not uploaded_file:
+                messages.error(request, "⚠️ Please select a CSV file to upload.")
+                return redirect("admin:upload_master_data")
+    
+            # Read & decode the uploaded file
+            file_bytes = uploaded_file.read()
+            try:
+                decoded_file = file_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                decoded_file = file_bytes.decode("latin-1")
+    
+            csv_buffer = io.StringIO(decoded_file, newline='')
+            reader = csv.DictReader(csv_buffer)
+    
+            created_count = 0
+            updated_count = 0
+    
+            for row in reader:
+                username = (row.get("username") or "").strip()
+                enrollment = (row.get("enrollment_no") or "").strip()
+                email = (row.get("email") or "").strip()
+                user_type = (row.get("user_type") or "student").strip().lower()
+                face_path = (row.get("face_image") or "").strip()
+    
+                if not enrollment or not email:
+                    continue
+                
+                from .models import MasterUserRecord
+                record, created = MasterUserRecord.objects.update_or_create(
+                    enrollment_no=enrollment,
+                    defaults={
+                        "username": username,
+                        "email": email,
+                        "user_type": user_type,
+                    }
+                )
+    
+                if face_path:
+                    src_path = os.path.join(settings.MEDIA_ROOT, face_path)
+                    dest_dir = os.path.join(settings.MEDIA_ROOT, "faces", username)
+                    os.makedirs(dest_dir, exist_ok=True)
+                    dest_path = os.path.join(dest_dir, f"{username}_default.jpg")
+    
+                    if os.path.exists(src_path):
+                        shutil.copy(src_path, dest_path)
+                        record.face_image = f"faces/{username}/{username}_default.jpg"
+                        record.save()
+    
+                if created:
+                    created_count += 1
+                else:
+                    updated_count += 1
+    
+            messages.success(
+                request,
+                f"✅ Master data uploaded! ({created_count} created, {updated_count} updated)"
+            )
+            return redirect("admin:index")
+    
+        return render(request, "admin/upload_master_data.html", self.each_context(request))
+
+    
     def index(self, request, extra_context=None):
         # CSV export (if requested)
         if request.GET.get('export') == 'csv':
             return self.export_attendance_csv()
-
-        context = self.get_dashboard_context(request)
+    
+        context = {
+            **self.get_dashboard_context(request),
+            **self.each_context(request),
+        }
         return TemplateResponse(request, "admin/index.html", context)
+
 
     # ---------------------------
     # AJAX for real-time updates
@@ -171,8 +248,16 @@ class CustomAdminSite(admin.AdminSite):
 # ---------------------------
 # Create custom admin site instance
 # ---------------------------
+
 custom_admin_site = CustomAdminSite(name='custom_admin')
 
+
+class MasterUserRecordAdmin(admin.ModelAdmin):
+    list_display = ("username", "enrollment_no", "user_type", "email", "created_at")
+    search_fields = ("username", "enrollment_no")
+
+# ✅ Register with your custom admin site
+custom_admin_site.register(MasterUserRecord, MasterUserRecordAdmin)
 
 # ---------------------------
 # CustomUser Admin
@@ -335,7 +420,9 @@ class AttendanceAdmin(admin.ModelAdmin):
             "user_type_filter": user_type_filter,
             "search_query": search_query,
         }
-        return TemplateResponse(request, "admin/all_users_attendance.html", context)
+        return TemplateResponse(request,"admin/all_users_attendance.html",{**context,**self.admin_site.each_context(request),
+        }
+)
 
 # Re    gister admin
 custom_admin_site.register(Attendance, AttendanceAdmin)
@@ -476,9 +563,9 @@ class FaceChangeRequestAdmin(admin.ModelAdmin):
                 count += 1
     
             except Exception as e:
-                self.message_user(request, f"Error approving {obj.user.username}: {str(e)}", dj_messages.ERROR)
+                self.message_user(request, f"Error approving {obj.user.username}: {str(e)}", messages.ERROR)
     
-        self.message_user(request, f"{count} face change request(s) approved ✅", dj_messages.SUCCESS)
+        self.message_user(request, f"{count} face change request(s) approved ✅", messages.SUCCESS)
     
     @admin.action(description="Reject selected face change requests")
     def reject_request(self, request, queryset):
@@ -487,7 +574,7 @@ class FaceChangeRequestAdmin(admin.ModelAdmin):
             obj.status = "Rejected"
             obj.save()
             count += 1
-        self.message_user(request, f"{count} face change request(s) rejected 🚫", dj_messages.WARNING)
+        self.message_user(request, f"{count} face change request(s) rejected 🚫", messages.WARNING)
 
 custom_admin_site.register(FaceChangeRequest, FaceChangeRequestAdmin)
 
